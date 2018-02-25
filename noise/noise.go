@@ -2,6 +2,7 @@ package noise
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"sync"
 )
@@ -49,19 +50,19 @@ func Fbm2(x, y, frequency, lacunarity, gain float32, octaves int) float32 {
 func MakeNoise(noiseType NoiseType, frequency, lacunarity, gain float32, octaves, width, height int) (noise []float32, min, max float32) {
 	mutex := &sync.Mutex{}
 	noiseArray := make([]float32, width*height)
-	min = float32(9999.0)
-	max = float32(-9999.0)
-
 	numRoutines := runtime.NumCPU()
-
 	var wg sync.WaitGroup
 	wg.Add(numRoutines)
-
 	batchSize := len(noiseArray) / numRoutines
+
+	min = float32(math.MaxFloat32)
+	max = float32(-math.MaxFloat32)
 
 	for i := 0; i < numRoutines; i++ {
 		go func(i int) {
 			defer wg.Done()
+			innerMin := float32(math.MaxFloat32)
+			innerMax := float32(-math.MaxFloat32)
 			start := i * batchSize
 			end := start + batchSize - 1
 			for j := start; j < end; j++ {
@@ -77,18 +78,19 @@ func MakeNoise(noiseType NoiseType, frequency, lacunarity, gain float32, octaves
 					fmt.Println("Invalid noise type")
 				}
 
-				// Race condition possibility?
-				if noiseArray[j] < min || noiseArray[j] > max {
-					mutex.Lock()
-					if noiseArray[i] < min {
-						min = noiseArray[j]
-					} else if noiseArray[j] > max {
-						max = noiseArray[j]
-					}
-					mutex.Unlock()
+				if noiseArray[i] < innerMin {
+					innerMin = noiseArray[j]
+				} else if noiseArray[j] > innerMax {
+					innerMax = noiseArray[j]
 				}
-
 			}
+			mutex.Lock()
+			if innerMin < min {
+				min = innerMin
+			} else if innerMax > max {
+				max = innerMax
+			}
+			mutex.Unlock()
 		}(i)
 	}
 	wg.Wait()

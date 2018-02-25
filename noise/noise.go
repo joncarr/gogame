@@ -1,86 +1,26 @@
-package main
+package noise
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"runtime"
 	"sync"
-	"time"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
+
+// NoiseType indicates which type of noise MakeNoise will generate
+type NoiseType int
 
 const (
-	winWidth  = 800
-	winHeight = 600
+	FBM = iota
+	TURBULENCE
 )
 
-func lerp(b1, b2 byte, pct float32) byte {
-	return byte(float32(b1) + pct*(float32(b2)-float32(b1)))
-}
-
-func colorLerp(c1, c2 color, pct float32) color {
-	return color{
-		lerp(c1.r, c2.r, pct),
-		lerp(c1.g, c2.g, pct),
-		lerp(c1.b, c2.b, pct),
-	}
-}
-
-func getGradient(c1, c2 color) []color {
-	r := make([]color, 256)
-	for i := range r {
-		pct := float32(i) / float32(255)
-		r[i] = colorLerp(c1, c2, pct)
-	}
-	return r
-}
-
-func getDualGradient(c1, c2, c3, c4 color) []color {
-	r := make([]color, 256)
-	for i := range r {
-		pct := float32(i) / float32(255)
-		if pct < 0.5 {
-			r[i] = colorLerp(c1, c2, pct*float32(2))
-		} else {
-			r[i] = colorLerp(c3, c4, pct*float32(1.5)-float32(0.5))
-		}
-
-	}
-	return r
-}
-
-func clamp(min, max, v int) int {
-	if v < min {
-		v = min
-	} else if v > max {
-		v = max
-	}
-	return v
-}
-
-func rescaleAndDraw(noise []float32, min, max float32, gradient []color, pixels []byte) {
-	scale := 255.0 / (max - min)
-	offset := min * scale
-
-	for i := range noise {
-		noise[i] = noise[i]*scale - offset
-		c := gradient[clamp(0, 255, int(noise[i]))]
-		p := i * 4
-		pixels[p] = c.r
-		pixels[p+1] = c.g
-		pixels[p+2] = c.b
-	}
-}
-
-// turbulence
-func turbulence(x, y, frequency, lacunarity, gain float32, octaves int) float32 {
+// Turbulence generates turbulence fractal noise
+func Turbulence(x, y, frequency, lacunarity, gain float32, octaves int) float32 {
 	var sum float32
 	amplitude := float32(1)
 
 	for i := 0; i < octaves; i++ {
-		f := snoise2(x*frequency, y*frequency) * amplitude
+		f := SimplexNoise(x*frequency, y*frequency) * amplitude
 		if f < 0 {
 			f *= -1.0
 		}
@@ -92,34 +32,25 @@ func turbulence(x, y, frequency, lacunarity, gain float32, octaves int) float32 
 	return sum
 }
 
-// fractal brownian motion
-func fbm2(x, y, frequency, lacunarity, gain float32, octaves int) float32 {
+// Fbm2 generates fractal brownian motion noise
+func Fbm2(x, y, frequency, lacunarity, gain float32, octaves int) float32 {
 	var sum float32
 	amplitude := float32(1.0)
 
 	for i := 0; i < octaves; i++ {
-		sum += snoise2(x*frequency, y*frequency) * amplitude
+		sum += SimplexNoise(x*frequency, y*frequency) * amplitude
 		frequency *= lacunarity
 		amplitude *= gain
 	}
 	return sum
 }
 
-func clearConsole() {
-	cmd := exec.Command("clear")
-	cmd.Stdout = os.Stdout
-	cmd.Run()
-}
-
-func makeNoise(pixels []byte, frequency, lacunarity, gain float32, octaves, width, height int) {
+// MakeNoise generates a 2D block of noise
+func MakeNoise(noiseType NoiseType, frequency, lacunarity, gain float32, octaves, width, height int) (noise []float32, min, max float32) {
 	mutex := &sync.Mutex{}
-	startTime := time.Now()
-	noiseArray := make([]float32, winWidth*winHeight)
-	// clearConsole()
-	fmt.Printf("Frequency: %f\nLacunarity: %f\nGain: %f\nOctave: %d", frequency, lacunarity, gain, octaves)
-	// i := 0
-	min := float32(9999.0)
-	max := float32(-9999.0)
+	noiseArray := make([]float32, width*height)
+	min = float32(9999.0)
+	max = float32(-9999.0)
 
 	numRoutines := runtime.NumCPU()
 
@@ -137,7 +68,14 @@ func makeNoise(pixels []byte, frequency, lacunarity, gain float32, octaves, widt
 				x := j % width
 				y := (j - x) / height
 
-				noiseArray[j] = turbulence(float32(x), float32(y), frequency, lacunarity, gain, octaves)
+				switch noiseType {
+				case FBM:
+					noiseArray[j] = Fbm2(float32(x), float32(y), frequency, lacunarity, gain, octaves)
+				case TURBULENCE:
+					noiseArray[j] = Turbulence(float32(x), float32(y), frequency, lacunarity, gain, octaves)
+				default:
+					fmt.Println("Invalid noise type")
+				}
 
 				// Race condition possibility?
 				if noiseArray[j] < min || noiseArray[j] > max {
@@ -154,108 +92,7 @@ func makeNoise(pixels []byte, frequency, lacunarity, gain float32, octaves, widt
 		}(i)
 	}
 	wg.Wait()
-	elapsedTime := time.Since(startTime).Seconds() * 1000
-	fmt.Println(elapsedTime)
-	// gradient := getGradient(
-	// 	color{90, 54, 102},
-	// 	color{184, 194, 217},
-	// )
-
-	gradient := getDualGradient(
-		color{90, 54, 102},
-		color{184, 194, 217},
-		color{48, 44, 95},
-		color{21, 38, 82},
-	)
-	rescaleAndDraw(noiseArray, min, max, gradient, pixels)
-}
-
-type color struct {
-	r, g, b byte
-}
-
-func setPixel(x, y int, c color, pixels []byte) {
-
-	index := (y*winWidth + x) * 4
-
-	if index < len(pixels)-4 && index >= 0 {
-		pixels[index] = c.r
-		pixels[index+1] = c.g
-		pixels[index+2] = c.b
-	}
-}
-
-func main() {
-
-	if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
-		panic(err)
-	}
-	defer sdl.Quit()
-
-	window, err := sdl.CreateWindow("NOISE!", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, winWidth, winHeight, sdl.WINDOW_SHOWN)
-	if err != nil {
-		panic(err)
-	}
-	defer window.Destroy()
-
-	renderer, err := sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
-	if err != nil {
-		panic(err)
-	}
-	defer renderer.Destroy()
-
-	texture, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING, winWidth, winHeight)
-	if err != nil {
-		panic(err)
-	}
-	defer texture.Destroy()
-
-	// Screen Buffer
-	pixels := make([]byte, winWidth*winHeight*4)
-
-	frequency := float32(.01)
-	octaves := 3
-	gain := float32(0.2)
-	lacunarity := float32(3.0)
-
-	makeNoise(pixels, frequency, lacunarity, gain, octaves, winHeight, winHeight)
-	keyState := sdl.GetKeyboardState()
-
-	for {
-		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
-			switch event.(type) {
-			case *sdl.QuitEvent:
-				return
-			}
-		}
-
-		mult := 1
-		if keyState[sdl.SCANCODE_LSHIFT] != 0 || keyState[sdl.SCANCODE_RSHIFT] != 0 {
-			mult = -1
-		}
-		if keyState[sdl.SCANCODE_O] != 0 {
-			octaves += 1 * mult
-			makeNoise(pixels, frequency, lacunarity, gain, octaves, winWidth, winHeight)
-		}
-		if keyState[sdl.SCANCODE_F] != 0 {
-			frequency += .001 * float32(mult)
-			makeNoise(pixels, frequency, lacunarity, gain, octaves, winWidth, winHeight)
-		}
-		if keyState[sdl.SCANCODE_G] != 0 {
-			gain += 0.1 * float32(mult)
-			makeNoise(pixels, frequency, lacunarity, gain, octaves, winWidth, winHeight)
-		}
-		if keyState[sdl.SCANCODE_L] != 0 {
-			lacunarity += 0.1 * float32(mult)
-			makeNoise(pixels, frequency, lacunarity, gain, octaves, winWidth, winHeight)
-		}
-
-		texture.Update(nil, pixels, winWidth*4)
-		renderer.Copy(texture, nil, nil)
-		renderer.Present()
-	}
-
-	// sdl.Delay(2000)
+	return noiseArray, min, max
 }
 
 /* This code ported to Go from Stefan Gustavson's C implementation, his comments follow:
@@ -341,8 +178,8 @@ func grad2(hash uint8, x, y float32) float32 {
 	return u + v
 }
 
-// 2D simplex noise
-func snoise2(x, y float32) float32 {
+// SimplexNoise 2D Block noise
+func SimplexNoise(x, y float32) float32 {
 
 	const F2 float32 = 0.366025403 // F2 = 0.5*(sqrt(3.0)-1.0)
 	const G2 float32 = 0.211324865 // G2 = (3.0-Math.sqrt(3.0))/6.0

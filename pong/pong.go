@@ -11,6 +11,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/joncarr/gogame/noise"
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -173,7 +174,7 @@ type Paddle struct {
 // returns value of start point 'a' plus the provided
 // percentage 'pct' times the difference of start point
 // 'a' and end point 'b'
-func lerp(a, b, pct float32) float32 {
+func flerp(a, b, pct float32) float32 {
 	return a + pct*(b-a)
 }
 
@@ -187,7 +188,7 @@ func (p *Paddle) draw(pixels []byte) {
 		}
 	}
 
-	numX := lerp(p.x, getCenter().x, 0.5)
+	numX := flerp(p.x, getCenter().x, 0.5)
 	drawNumber(Pos{numX, 35}, p.color, 10, p.score, pixels)
 
 }
@@ -217,6 +218,66 @@ func clear(pixels []byte) {
 	}
 }
 
+func lerp(b1, b2 byte, pct float32) byte {
+	return byte(float32(b1) + pct*(float32(b2)-float32(b1)))
+}
+
+func colorLerp(c1, c2 Color, pct float32) Color {
+	return Color{
+		lerp(c1.r, c2.r, pct),
+		lerp(c1.g, c2.g, pct),
+		lerp(c1.b, c2.b, pct),
+	}
+}
+
+func getGradient(c1, c2 Color) []Color {
+	r := make([]Color, 256)
+	for i := range r {
+		pct := float32(i) / float32(255)
+		r[i] = colorLerp(c1, c2, pct)
+	}
+	return r
+}
+
+func getDualGradient(c1, c2, c3, c4 Color) []Color {
+	r := make([]Color, 256)
+	for i := range r {
+		pct := float32(i) / float32(255)
+		if pct < 0.5 {
+			r[i] = colorLerp(c1, c2, pct*float32(2))
+		} else {
+			r[i] = colorLerp(c3, c4, pct*float32(1.5)-float32(0.5))
+		}
+
+	}
+	return r
+}
+
+func clamp(min, max, v int) int {
+	if v < min {
+		v = min
+	} else if v > max {
+		v = max
+	}
+	return v
+}
+
+func rescaleAndDraw(noise []float32, min, max float32, gradient []Color, width, height int) []byte {
+	result := make([]byte, width*height*4)
+	scale := 255.0 / (max - min)
+	offset := min * scale
+
+	for i := range noise {
+		noise[i] = noise[i]*scale - offset
+		c := gradient[clamp(0, 255, int(noise[i]))]
+		p := i * 4
+		result[p] = c.r
+		result[p+1] = c.g
+		result[p+2] = c.b
+	}
+	return result
+}
+
 func setPixel(x, y int, c Color, pixels []byte) {
 
 	index := (y*winWidth + x) * 4
@@ -235,7 +296,7 @@ func main() {
 	}
 	defer sdl.Quit()
 
-	window, err := sdl.CreateWindow("PONKEY PONG", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, int32(winWidth), int32(winHeight), sdl.WINDOW_SHOWN)
+	window, err := sdl.CreateWindow("PONKEY PONG", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, winWidth, winHeight, sdl.WINDOW_SHOWN)
 	if err != nil {
 		panic(err)
 	}
@@ -247,7 +308,7 @@ func main() {
 	}
 	defer renderer.Destroy()
 
-	texture, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING, int32(winWidth), int32(winHeight))
+	texture, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING, winWidth, winHeight)
 	if err != nil {
 		panic(err)
 	}
@@ -266,6 +327,10 @@ func main() {
 	ball := Ball{Pos{300, 300}, 15, 400, 400, Color{225, 225, 225}}
 
 	keyState := sdl.GetKeyboardState()
+
+	noise, min, max := noise.MakeNoise(noise.FBM, .01, 0.2, 2, 3, winWidth, winHeight)
+	gradient := getGradient(Color{255, 0, 0}, Color{0, 0, 0})
+	noisePixels := rescaleAndDraw(noise, min, max, gradient, winWidth, winHeight)
 
 	var frameStart time.Time
 	var elapsedTime float32
@@ -286,7 +351,7 @@ func main() {
 		// Check joysticks
 		for _, controller := range controllerHandlers {
 			if controller != nil {
-				controllerAxis = controller.Axis(sdl.CONTROLLER_AXIS_LEFTY)
+				controllerAxis = controller.GetAxis(sdl.CONTROLLER_AXIS_LEFTY)
 			}
 		}
 
@@ -304,7 +369,9 @@ func main() {
 			}
 		}
 
-		clear(pixels)
+		for i := range noisePixels {
+			pixels[i] = noisePixels[i]
+		}
 		p1.draw(pixels)
 		p2.draw(pixels)
 		ball.draw(pixels)
@@ -316,7 +383,7 @@ func main() {
 		elapsedTime = float32(time.Since(frameStart).Seconds())
 
 		if elapsedTime < .005 {
-			sdl.Delay(5 - uint32(elapsedTime/1000.0))
+			sdl.Delay(5 - uint32(elapsedTime*1000.0))
 			elapsedTime = float32(time.Since(frameStart).Seconds())
 		}
 

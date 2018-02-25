@@ -11,7 +11,10 @@ import (
 type NoiseType int
 
 const (
+	// FBM fractal brownian motion noise
 	FBM = iota
+
+	// TURBULENCE noise type
 	TURBULENCE
 )
 

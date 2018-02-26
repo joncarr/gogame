@@ -70,7 +70,7 @@ func MakeNoise(noiseType NoiseType, frequency, lacunarity, gain float32, octaves
 			end := start + batchSize - 1
 			for j := start; j < end; j++ {
 				x := j % width
-				y := (j - x) / height
+				y := (j - x) / width
 
 				switch noiseType {
 				case FBM:

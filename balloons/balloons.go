@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/joncarr/gogame/noise"
+
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -15,14 +17,14 @@ const (
 	curDir    = "/home/jec/Code/GoCode/src/github.com/joncarr/gogame/balloons"
 )
 
+type pos struct {
+	x, y float32
+}
+
 type texture struct {
 	pos
 	pixels      []byte
 	w, h, pitch int
-}
-
-type pos struct {
-	x, y float32
 }
 
 func clear(pixels []byte) {
@@ -139,9 +141,69 @@ func loadBalloons() []texture {
 			}
 		}
 
-		balloonTextures[i] = texture{pos{0, 0}, balloonPixels, w, h, w * 4}
+		balloonTextures[i] = texture{pos{float32(i * 60), float32(i * 60)}, balloonPixels, w, h, w * 4}
 	}
 	return balloonTextures
+}
+
+func lerp(b1, b2 byte, pct float32) byte {
+	return byte(float32(b1) + pct*(float32(b2)-float32(b1)))
+}
+
+func colorLerp(c1, c2 rgba, pct float32) rgba {
+	return rgba{
+		lerp(c1.r, c2.r, pct),
+		lerp(c1.g, c2.g, pct),
+		lerp(c1.b, c2.b, pct),
+	}
+}
+
+func getGradient(c1, c2 rgba) []rgba {
+	r := make([]rgba, 256)
+	for i := range r {
+		pct := float32(i) / float32(255)
+		r[i] = colorLerp(c1, c2, pct)
+	}
+	return r
+}
+
+func getDualGradient(c1, c2, c3, c4 rgba) []rgba {
+	r := make([]rgba, 256)
+	for i := range r {
+		pct := float32(i) / float32(255)
+		if pct < 0.5 {
+			r[i] = colorLerp(c1, c2, pct*float32(2))
+		} else {
+			r[i] = colorLerp(c3, c4, pct*float32(1.5)-float32(0.5))
+		}
+
+	}
+	return r
+}
+
+func clamp(min, max, v int) int {
+	if v < min {
+		v = min
+	} else if v > max {
+		v = max
+	}
+	return v
+}
+
+func rescaleAndDraw(noise []float32, min, max float32, gradient []rgba, width, height int) []byte {
+	result := make([]byte, width*height*4)
+	scale := 255.0 / (max - min)
+	offset := min * scale
+
+	for i := range noise {
+		noise[i] = noise[i]*scale - offset
+		c := gradient[clamp(0, 255, int(noise[i]))]
+		p := i * 4
+		result[p] = c.r
+		result[p+1] = c.g
+		result[p+2] = c.b
+	}
+	return result
 }
 
 func main() {
@@ -163,11 +225,17 @@ func main() {
 	}
 	defer renderer.Destroy()
 
-	texture, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING, winWidth, winHeight)
+	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STREAMING, winWidth, winHeight)
 	if err != nil {
 		panic(err)
 	}
-	defer texture.Destroy()
+	defer tex.Destroy()
+
+	cloudNoise, min, max := noise.MakeNoise(noise.FBM, .003, .5, 3, 2, winWidth, winHeight)
+	cloudGradient := getGradient(rgba{0, 15, 255}, rgba{255, 255, 255})
+	cloudPixels := rescaleAndDraw(cloudNoise, min, max, cloudGradient, winWidth, winHeight)
+
+	cloudTexture := texture{pos{0, 0}, cloudPixels, winWidth, winHeight, winWidth * 4}
 
 	pixels := make([]byte, winWidth*winHeight*4)
 	balloons := loadBalloons()
@@ -183,7 +251,7 @@ func main() {
 				return
 			}
 		}
-		clear(pixels)
+		cloudTexture.draw(pixels)
 		for _, tex := range balloons {
 			tex.drawAlpha(pixels)
 		}
@@ -193,8 +261,8 @@ func main() {
 			dir = dir * -1
 		}
 
-		texture.Update(nil, pixels, winWidth*4)
-		renderer.Copy(texture, nil, nil)
+		tex.Update(nil, pixels, winWidth*4)
+		renderer.Copy(tex, nil, nil)
 		renderer.Present()
 
 		elapsedTime := float32(time.Since(frameStart).Seconds() * 1000)
